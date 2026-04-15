@@ -10,7 +10,6 @@ GetDictPwd_FILES = Tweak.x
 GetDictPwd_CFLAGS = -fobjc-arc
 GetDictPwd_FRAMEWORKS = UIKit Foundation
 
-# 👇 就是新增了这一行，告诉编译器忽略找不到的外部函数，留到运行时再解析
-GetDictPwd_LDFLAGS = -undefined dynamic_lookup
+# 注意：这里已经删除了上一轮的 GetDictPwd_LDFLAGS = -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk
