@@ -6,10 +6,9 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = GetDictPwd
 
-GetDictPwd_FILES = Tweak.x
+# 👇 注意这里，加上了 fishhook.c
+GetDictPwd_FILES = Tweak.x fishhook.c
 GetDictPwd_CFLAGS = -fobjc-arc
 GetDictPwd_FRAMEWORKS = UIKit Foundation
-
-# 注意：这里已经删除了上一轮的 GetDictPwd_LDFLAGS = -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/tweak.mk
