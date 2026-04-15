@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 拉取你的代码
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4  # <-- 已升级到 v4
 
       - name: 安装基础依赖环境
         run: |
@@ -32,7 +32,7 @@ jobs:
           make
 
       - name: 打包并上传生成的 Dylib 供下载
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4  # <-- 已升级到 v4
         with:
           name: Hook-Dylib
           path: .theos/obj/debug/*.dylib
