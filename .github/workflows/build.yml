@@ -1,8 +1,22 @@
-steps:
+name: Compile iOS Dylib
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: 
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
       - name: 拉取你的代码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖环境
+      - name: 安装基础依赖环境 (macOS 环境)
         run: |
           brew install ldid xz
 
@@ -15,7 +29,6 @@ steps:
           mv sdks-master/* $THEOS/sdks/
           rm -rf master.zip sdks-master
 
-      # 👇 新增：在编译前自动下载 fishhook
       - name: 下载 Fishhook
         run: |
           curl -O https://raw.githubusercontent.com/facebook/fishhook/master/fishhook.h
@@ -26,7 +39,7 @@ steps:
           export THEOS=~/theos
           make
 
-      - name: 打包并上传
+      - name: 打包并上传生成的 Dylib 供下载
         uses: actions/upload-artifact@v4
         with:
           name: Hook-Dylib
