@@ -3,19 +3,22 @@ name: Compile iOS Dylib
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch: # 允许手动点击运行
+  workflow_dispatch: 
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest  # <-- 核心修改：直接换成苹果 Mac 服务器！
+
     steps:
       - name: 拉取你的代码
-        uses: actions/checkout@v4  # <-- 已升级到 v4
+        uses: actions/checkout@v4
 
-      - name: 安装基础依赖环境
+      - name: 安装基础依赖环境 (macOS 环境)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential fakeroot git perl python3 unzip curl
+          brew install ldid xz
 
       - name: 安装 Theos 和 iOS SDK
         run: |
@@ -32,7 +35,7 @@ jobs:
           make
 
       - name: 打包并上传生成的 Dylib 供下载
-        uses: actions/upload-artifact@v4  # <-- 已升级到 v4
+        uses: actions/upload-artifact@v4
         with:
           name: Hook-Dylib
           path: .theos/obj/debug/*.dylib
