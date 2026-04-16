@@ -4,10 +4,10 @@ INSTALL_TARGET_PROCESSES = SpringBoard
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = AllInOneDumper
+TWEAK_NAME = DictCoreDumper
 
-AllInOneDumper_FILES = Tweak.x fishhook.c
-AllInOneDumper_CFLAGS = -fobjc-arc
-AllInOneDumper_FRAMEWORKS = UIKit Foundation
+DictCoreDumper_FILES = Tweak.x fishhook.c
+DictCoreDumper_CFLAGS = -fobjc-arc
+DictCoreDumper_FRAMEWORKS = UIKit Foundation WebKit
 
 include $(THEOS_MAKE_PATH)/tweak.mk
