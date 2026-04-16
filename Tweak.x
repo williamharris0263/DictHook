@@ -5,7 +5,7 @@
 #import "fishhook.h"
 
 // ==========================================
-// 目标一：数据库明文密码全量拦截 (Fishhook)
+// 目标一：数据库明文密码全量拦截 (保留)
 // ==========================================
 static NSMutableArray *allCapturedDbKeys;
 static int (*original_sqlite3_key)(void *db, const void *pKey, int nKey);
@@ -33,97 +33,77 @@ static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
             
             NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
             [finalOutput writeToFile:[docPath stringByAppendingPathComponent:@"sqlcipher_all_keys.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
-            
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [UIPasteboard generalPasteboard].string = finalOutput;
-            });
         }
     }
     return original_sqlite3_key(db, pKey, nKey);
 }
 
 // ==========================================
-// 目标二：HTML 网页渲染拦截 (Logos)
+// 目标二：突破“阅后即焚” (抢夺物理文件)
 // ==========================================
-static void saveDecryptedHTML(NSString *html, NSURL *baseURL) {
-    if (!html || html.length == 0) return;
+static void backupHTMLFile(NSString *htmlString, NSString *originalName) {
+    if (!htmlString || htmlString.length == 0) return;
 
     NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-    NSString *saveDir = [docPath stringByAppendingPathComponent:@"DecryptedHTML"];
+    NSString *saveDir = [docPath stringByAppendingPathComponent:@"DecryptedHTML_Backup"];
     [[NSFileManager defaultManager] createDirectoryAtPath:saveDir withIntermediateDirectories:YES attributes:nil error:nil];
 
-    // 尝试从 baseURL 提取原始名称，若无则使用时间戳
-    NSString *originalFileName = @"UnknownEntry";
-    if (baseURL && baseURL.lastPathComponent && baseURL.lastPathComponent.length > 0) {
-        originalFileName = baseURL.lastPathComponent;
-    }
-
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    NSString *finalName = [NSString stringWithFormat:@"%@_%ld.html", originalFileName, (long)now];
+    // 保存名字：原文件名_时间戳.html
+    NSString *finalName = [NSString stringWithFormat:@"%@_%ld.html", originalName, (long)now];
     NSString *filePath = [saveDir stringByAppendingPathComponent:finalName];
 
-    [html writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [htmlString writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSLog(@"[DictHook] 抢夺成功！已备份: %@", finalName);
 }
 
 %hook WKWebView
+
+// 1. 拦截直接传字符串的情况 (向下兼容)
 - (WKNavigation *)loadHTMLString:(NSString *)string baseURL:(NSURL *)baseURL {
-    saveDecryptedHTML(string, baseURL);
+    backupHTMLFile(string, baseURL ? baseURL.lastPathComponent : @"StringLoad");
     return %orig(string, baseURL);
 }
-- (WKNavigation *)loadData:(NSData *)data MIMEType:(NSString *)MIMEType characterEncodingName:(NSString *)encoding baseURL:(NSURL *)baseURL {
-    if ([MIMEType containsString:@"html"]) {
-        NSString *html = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        saveDecryptedHTML(html, baseURL);
-    }
-    return %orig(data, MIMEType, encoding, baseURL);
-}
-%end
 
-// ==========================================
-// 目标三：内存切片狙击解密母包 (Logos) - 已降低门槛
-// ==========================================
-%hook NSData
-- (NSData *)subdataWithRange:(NSRange)range {
-    // 狙击条件：母体数据大于10KB (适配你列表里的小文件)，且切片在合理范围内
-    if (self.length > 10000 && range.length > 50 && range.length < 80000) {
-        NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *dumpDir = [docPath stringByAppendingPathComponent:@"DecryptedPacks"];
-        [[NSFileManager defaultManager] createDirectoryAtPath:dumpDir withIntermediateDirectories:YES attributes:nil error:nil];
-        
-        // 使用该内存块的准确字节数作为文件名标识
-        NSString *fileName = [NSString stringWithFormat:@"DecryptedPack_%lu_bytes.bin", (unsigned long)self.length];
-        NSString *savePath = [dumpDir stringByAppendingPathComponent:fileName];
-        
-        if (![[NSFileManager defaultManager] fileExistsAtPath:savePath]) {
-            [self writeToFile:savePath atomically:YES];
-            NSLog(@"[DictHook] 狙击成功！截获数据母包: %@", fileName);
+// 2. 拦截“阅后即焚”的物理文件加载 (核心绝杀点！)
+- (WKNavigation *)loadFileURL:(NSURL *)URL allowingReadAccessToURL:(NSURL *)readAccessURL {
+    // 此时文件必定还存在于磁盘上，因为还要交给 WebView 渲染
+    if (URL && URL.isFileURL) {
+        NSString *filePath = URL.path;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+            // 在 App 删除它之前，瞬间把它读出来！
+            NSError *error;
+            NSString *htmlContent = [NSString stringWithContentsOfFile:filePath encoding:NSUTF8StringEncoding error:&error];
+            if (htmlContent) {
+                // 提取文件的原名 (比如随机目录外的名字)
+                backupHTMLFile(htmlContent, URL.lastPathComponent);
+            }
         }
     }
-    return %orig(range);
+    return %orig(URL, readAccessURL);
 }
+
 %end
 
 // ==========================================
-// 初始化与全量挂载
+// 初始化
 // ==========================================
 %ctor {
-    // 挂载数据库 Fishhook
     struct rebinding sql_reb;
     sql_reb.name = "sqlite3_key";
     sql_reb.replacement = (void *)replaced_sqlite3_key;
     sql_reb.replaced = (void **)&original_sqlite3_key;
     rebind_symbols((struct rebinding[1]){sql_reb}, 1);
     
-    // 启动 5 秒后的安全状态提示
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
         UIViewController *topVC = keyWindow.rootViewController;
         while (topVC.presentedViewController) topVC = topVC.presentedViewController;
         
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🛡️ 终极逆向核心已注入" 
-                                                                       message:@"功能状态：\n1. 所有 DB 数据库密码监控中\n2. WKWebView 网页 HTML 监控中\n3. 内存切片数据母包狙击中 (门槛 10KB)\n\n请随意查询首字母不同的单词。所有文件将导出到沙盒 Documents 目录下。" 
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🚀 反阅后即焚已开启" 
+                                                                       message:@"已侦测到 App 可能使用了‘随机目录+阅后即焚’机制。\n\n请点击任意词条。\n插件将在文件被销毁前瞬间完成物理抢夺！\n结果保存在 DecryptedHTML_Backup 目录。" 
                                                                 preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"冲！" style:UIAlertActionStyleDefault handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"去点单词" style:UIAlertActionStyleDefault handler:nil]];
         if (topVC) [topVC presentViewController:alert animated:YES completion:nil];
     });
 }
