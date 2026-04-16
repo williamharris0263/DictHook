@@ -1,26 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <CommonCrypto/CommonCryptor.h>
+#import <WebKit/WebKit.h>
 #import <dlfcn.h>
 #import "fishhook.h"
 
 // ==========================================
-// 辅助工具函数
+// 目标一：数据库明文密码全量拦截 (Fishhook)
 // ==========================================
-static NSString * hexStringFromData(const void *bytes, size_t length) {
-    if (bytes == NULL || length == 0) return @"";
-    NSMutableString *hexStr = [NSMutableString stringWithCapacity:length * 2];
-    const unsigned char *buf = (const unsigned char *)bytes;
-    for (int i = 0; i < length; ++i) {
-        [hexStr appendFormat:@"%02X", (unsigned int)buf[i]];
-    }
-    return hexStr;
-}
-
-// ==========================================
-// 守卫一：数据库密码全量拦截 (永远保留该功能！)
-// ==========================================
-static NSMutableArray *allCapturedDbKeys; // 全局数组，保存所有密码
+static NSMutableArray *allCapturedDbKeys;
 static int (*original_sqlite3_key)(void *db, const void *pKey, int nKey);
 
 static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
@@ -28,33 +15,25 @@ static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
         if (!allCapturedDbKeys) allCapturedDbKeys = [[NSMutableArray alloc] init];
         
         NSData *keyData = [NSData dataWithBytes:pKey length:nKey];
-        // 核心诉求：抓取明文密码
         NSString *keyString = [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding];
         
         NSString *dbPathStr = @"[未知数据库路径]";
-        
-        // 动态反查数据库文件名，避免链接报错
         const char *(*dynamic_sqlite3_db_filename)(void *, const char *) = dlsym(RTLD_DEFAULT, "sqlite3_db_filename");
         if (dynamic_sqlite3_db_filename != NULL) {
             const char *dbPath = dynamic_sqlite3_db_filename(db, "main");
-            if (dbPath != NULL) {
-                dbPathStr = [NSString stringWithUTF8String:dbPath];
-            }
+            if (dbPath != NULL) dbPathStr = [NSString stringWithUTF8String:dbPath];
         }
         
         NSString *msg = [NSString stringWithFormat:@"📂 数据库: %@\n🔑 明文: %@\n🧬 Hex: %@", 
-                        dbPathStr.lastPathComponent ?: dbPathStr, keyString ?: @"[无法转码为普通文本]", keyData];
+                        dbPathStr.lastPathComponent ?: dbPathStr, keyString ?: @"[无法转码]", keyData];
         
-        // 追加写入，获取全部密码
         if (![allCapturedDbKeys containsObject:msg]) {
             [allCapturedDbKeys addObject:msg];
             NSString *finalOutput = [allCapturedDbKeys componentsJoinedByString:@"\n----------------------\n"];
             
-            // 写入沙盒
             NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
             [finalOutput writeToFile:[docPath stringByAppendingPathComponent:@"sqlcipher_all_keys.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
             
-            // 写入剪贴板
             dispatch_async(dispatch_get_main_queue(), ^{
                 [UIPasteboard generalPasteboard].string = finalOutput;
             });
@@ -64,64 +43,87 @@ static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
 }
 
 // ==========================================
-// 守卫二：网页解密拦截 (CCCrypt)
+// 目标二：HTML 网页渲染拦截 (Logos)
 // ==========================================
-static BOOL hasGrabbedCCCryptKey = NO;
-static int (*original_CCCrypt)(CCOperation op, CCAlgorithm alg, CCOptions options,
-                               const void *key, size_t keyLength, const void *iv,
-                               const void *dataIn, size_t dataInLength,
-                               void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved);
+static void saveDecryptedHTML(NSString *html, NSURL *baseURL) {
+    if (!html || html.length == 0) return;
 
-static int replaced_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions options,
-                            const void *key, size_t keyLength, const void *iv,
-                            const void *dataIn, size_t dataInLength,
-                            void *dataOut, size_t dataOutAvailable, size_t *dataOutMoved) {
-    
-    if (op == kCCDecrypt && !hasGrabbedCCCryptKey) {
-        hasGrabbedCCCryptKey = YES; 
-        
-        NSString *hexKey = hexStringFromData(key, keyLength);
-        NSString *hexIV = iv ? hexStringFromData(iv, 16) : @"无 (None)"; 
-        NSString *algoName = (alg == kCCAlgorithmAES128) ? @"AES-128" : @"DES/其他";
-        
-        NSString *msg = [NSString stringWithFormat:@"[网页 CCCrypt 解密密钥]\n算法: %@\nHex Key: %@\nHex IV: %@", algoName, hexKey, hexIV];
-        
-        NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        [msg writeToFile:[docPath stringByAppendingPathComponent:@"CCCrypt_Key.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString *saveDir = [docPath stringByAppendingPathComponent:@"DecryptedHTML"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:saveDir withIntermediateDirectories:YES attributes:nil error:nil];
+
+    // 尝试从 baseURL 提取原始名称，若无则使用时间戳
+    NSString *originalFileName = @"UnknownEntry";
+    if (baseURL && baseURL.lastPathComponent && baseURL.lastPathComponent.length > 0) {
+        originalFileName = baseURL.lastPathComponent;
     }
-    return original_CCCrypt(op, alg, options, key, keyLength, iv, dataIn, dataInLength, dataOut, dataOutAvailable, dataOutMoved);
+
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    NSString *finalName = [NSString stringWithFormat:@"%@_%ld.html", originalFileName, (long)now];
+    NSString *filePath = [saveDir stringByAppendingPathComponent:finalName];
+
+    [html writeToFile:filePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
+%hook WKWebView
+- (WKNavigation *)loadHTMLString:(NSString *)string baseURL:(NSURL *)baseURL {
+    saveDecryptedHTML(string, baseURL);
+    return %orig(string, baseURL);
+}
+- (WKNavigation *)loadData:(NSData *)data MIMEType:(NSString *)MIMEType characterEncodingName:(NSString *)encoding baseURL:(NSURL *)baseURL {
+    if ([MIMEType containsString:@"html"]) {
+        NSString *html = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        saveDecryptedHTML(html, baseURL);
+    }
+    return %orig(data, MIMEType, encoding, baseURL);
+}
+%end
+
 // ==========================================
-// 初始化注入
+// 目标三：内存切片狙击解密母包 (Logos) - 已降低门槛
+// ==========================================
+%hook NSData
+- (NSData *)subdataWithRange:(NSRange)range {
+    // 狙击条件：母体数据大于10KB (适配你列表里的小文件)，且切片在合理范围内
+    if (self.length > 10000 && range.length > 50 && range.length < 80000) {
+        NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+        NSString *dumpDir = [docPath stringByAppendingPathComponent:@"DecryptedPacks"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:dumpDir withIntermediateDirectories:YES attributes:nil error:nil];
+        
+        // 使用该内存块的准确字节数作为文件名标识
+        NSString *fileName = [NSString stringWithFormat:@"DecryptedPack_%lu_bytes.bin", (unsigned long)self.length];
+        NSString *savePath = [dumpDir stringByAppendingPathComponent:fileName];
+        
+        if (![[NSFileManager defaultManager] fileExistsAtPath:savePath]) {
+            [self writeToFile:savePath atomically:YES];
+            NSLog(@"[DictHook] 狙击成功！截获数据母包: %@", fileName);
+        }
+    }
+    return %orig(range);
+}
+%end
+
+// ==========================================
+// 初始化与全量挂载
 // ==========================================
 %ctor {
-    // 1. 同时挂载两个 Hook
-    struct rebinding rebs[2];
-    rebs[0].name = "sqlite3_key";
-    rebs[0].replacement = (void *)replaced_sqlite3_key;
-    rebs[0].replaced = (void **)&original_sqlite3_key;
+    // 挂载数据库 Fishhook
+    struct rebinding sql_reb;
+    sql_reb.name = "sqlite3_key";
+    sql_reb.replacement = (void *)replaced_sqlite3_key;
+    sql_reb.replaced = (void **)&original_sqlite3_key;
+    rebind_symbols((struct rebinding[1]){sql_reb}, 1);
     
-    rebs[1].name = "CCCrypt";
-    rebs[1].replacement = (void *)replaced_CCCrypt;
-    rebs[1].replaced = (void **)&original_CCCrypt;
-    
-    rebind_symbols(rebs, 2);
-    
-    // 2. 延迟 10 秒的安全汇报
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // 启动 5 秒后的安全状态提示
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
         UIViewController *topVC = keyWindow.rootViewController;
-        while (topVC.presentedViewController) {
-            topVC = topVC.presentedViewController;
-        }
+        while (topVC.presentedViewController) topVC = topVC.presentedViewController;
         
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🛡️ 全能提取器已就绪" 
-                                                                       message:@"1. 所有数据库密码（含明文）已在后台静默全量收集。\n2. 网页解密同步蹲守中。\n\n请在沙盒 Documents 目录下查看结果，或在备忘录中粘贴。" 
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🛡️ 终极逆向核心已注入" 
+                                                                       message:@"功能状态：\n1. 所有 DB 数据库密码监控中\n2. WKWebView 网页 HTML 监控中\n3. 内存切片数据母包狙击中 (门槛 10KB)\n\n请随意查询首字母不同的单词。所有文件将导出到沙盒 Documents 目录下。" 
                                                                 preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"开始提取" style:UIAlertActionStyleDefault handler:nil]];
-        if (topVC) {
-            [topVC presentViewController:alert animated:YES completion:nil];
-        }
+        [alert addAction:[UIAlertAction actionWithTitle:@"冲！" style:UIAlertActionStyleDefault handler:nil]];
+        if (topVC) [topVC presentViewController:alert animated:YES completion:nil];
     });
 }
