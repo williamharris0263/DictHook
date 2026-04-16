@@ -1,15 +1,12 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <CommonCrypto/CommonCryptor.h>
-#import <dlfcn.h> // 👇 新增：引入动态查找库
+#import <dlfcn.h>
 #import "fishhook.h"
 
 // ==========================================
 // 辅助工具函数
 // ==========================================
-// 删除了之前的直接声明，改用下面更安全的动态调用
-
-// 1. 将字节转为 Hex 字符串
 static NSString * hexStringFromData(const void *bytes, size_t length) {
     if (bytes == NULL || length == 0) return @"";
     NSMutableString *hexStr = [NSMutableString stringWithCapacity:length * 2];
@@ -21,9 +18,9 @@ static NSString * hexStringFromData(const void *bytes, size_t length) {
 }
 
 // ==========================================
-// 守卫一：数据库密码拦截 (SQLCipher)
+// 守卫一：数据库密码全量拦截 (永远保留该功能！)
 // ==========================================
-static NSMutableArray *allCapturedDbKeys;
+static NSMutableArray *allCapturedDbKeys; // 全局数组，保存所有密码
 static int (*original_sqlite3_key)(void *db, const void *pKey, int nKey);
 
 static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
@@ -31,11 +28,12 @@ static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
         if (!allCapturedDbKeys) allCapturedDbKeys = [[NSMutableArray alloc] init];
         
         NSData *keyData = [NSData dataWithBytes:pKey length:nKey];
+        // 核心诉求：抓取明文密码
         NSString *keyString = [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding];
         
         NSString *dbPathStr = @"[未知数据库路径]";
         
-        // 👇 修复点：使用 dlsym 动态查找函数，彻底绕过编译器的链接报错
+        // 动态反查数据库文件名，避免链接报错
         const char *(*dynamic_sqlite3_db_filename)(void *, const char *) = dlsym(RTLD_DEFAULT, "sqlite3_db_filename");
         if (dynamic_sqlite3_db_filename != NULL) {
             const char *dbPath = dynamic_sqlite3_db_filename(db, "main");
@@ -45,17 +43,18 @@ static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
         }
         
         NSString *msg = [NSString stringWithFormat:@"📂 数据库: %@\n🔑 明文: %@\n🧬 Hex: %@", 
-                        dbPathStr.lastPathComponent ?: dbPathStr, keyString ?: @"[无法转码]", keyData];
+                        dbPathStr.lastPathComponent ?: dbPathStr, keyString ?: @"[无法转码为普通文本]", keyData];
         
+        // 追加写入，获取全部密码
         if (![allCapturedDbKeys containsObject:msg]) {
             [allCapturedDbKeys addObject:msg];
             NSString *finalOutput = [allCapturedDbKeys componentsJoinedByString:@"\n----------------------\n"];
             
-            // 静默写入文件
+            // 写入沙盒
             NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
             [finalOutput writeToFile:[docPath stringByAppendingPathComponent:@"sqlcipher_all_keys.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
             
-            // 顺手复制到剪贴板
+            // 写入剪贴板
             dispatch_async(dispatch_get_main_queue(), ^{
                 [UIPasteboard generalPasteboard].string = finalOutput;
             });
@@ -89,11 +88,6 @@ static int replaced_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions options,
         
         NSString *docPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
         [msg writeToFile:[docPath stringByAppendingPathComponent:@"CCCrypt_Key.txt"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        
-        // 覆盖剪贴板为网页密钥
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [UIPasteboard generalPasteboard].string = msg;
-        });
     }
     return original_CCCrypt(op, alg, options, key, keyLength, iv, dataIn, dataInLength, dataOut, dataOutAvailable, dataOutMoved);
 }
@@ -114,8 +108,8 @@ static int replaced_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions options,
     
     rebind_symbols(rebs, 2);
     
-    // 2. 延迟 5 秒的安全引导弹窗
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // 2. 延迟 10 秒的安全汇报
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIWindow *keyWindow = [UIApplication sharedApplication].keyWindow;
         UIViewController *topVC = keyWindow.rootViewController;
         while (topVC.presentedViewController) {
@@ -123,7 +117,7 @@ static int replaced_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions options,
         }
         
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🛡️ 全能提取器已就绪" 
-                                                                       message:@"1. 数据库密码已在后台静默收集。\n2. 网页解密蹲守中，请随便点击一个词条。\n\n收集到的所有数据均存放在 App 沙盒 Documents 目录下（sqlcipher_all_keys.txt 和 CCCrypt_Key.txt）。" 
+                                                                       message:@"1. 所有数据库密码（含明文）已在后台静默全量收集。\n2. 网页解密同步蹲守中。\n\n请在沙盒 Documents 目录下查看结果，或在备忘录中粘贴。" 
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"开始提取" style:UIAlertActionStyleDefault handler:nil]];
         if (topVC) {
