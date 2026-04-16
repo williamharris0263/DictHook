@@ -4,11 +4,12 @@ INSTALL_TARGET_PROCESSES = SpringBoard
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = GetDictPwd
+TWEAK_NAME = DictDataMaster
 
-# 👇 注意这里，加上了 fishhook.c
-GetDictPwd_FILES = Tweak.x fishhook.c
-GetDictPwd_CFLAGS = -fobjc-arc
-GetDictPwd_FRAMEWORKS = UIKit Foundation
+# 包含 fishhook.c
+DictDataMaster_FILES = Tweak.x fishhook.c
+DictDataMaster_CFLAGS = -fobjc-arc
+# 包含 WebKit 框架
+DictDataMaster_FRAMEWORKS = UIKit Foundation WebKit
 
 include $(THEOS_MAKE_PATH)/tweak.mk
