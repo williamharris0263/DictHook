@@ -4,12 +4,10 @@ INSTALL_TARGET_PROCESSES = SpringBoard
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = DictDataMaster
+TWEAK_NAME = AllInOneDumper
 
-# 包含 fishhook.c
-DictDataMaster_FILES = Tweak.x fishhook.c
-DictDataMaster_CFLAGS = -fobjc-arc
-# 包含 WebKit 框架
-DictDataMaster_FRAMEWORKS = UIKit Foundation WebKit
+AllInOneDumper_FILES = Tweak.x fishhook.c
+AllInOneDumper_CFLAGS = -fobjc-arc
+AllInOneDumper_FRAMEWORKS = UIKit Foundation
 
 include $(THEOS_MAKE_PATH)/tweak.mk
