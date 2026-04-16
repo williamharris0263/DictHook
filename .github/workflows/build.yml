@@ -16,7 +16,7 @@ jobs:
       - name: 拉取你的代码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖环境 (macOS 环境)
+      - name: 安装基础依赖环境
         run: |
           brew install ldid xz
 
@@ -39,7 +39,7 @@ jobs:
           export THEOS=~/theos
           make
 
-      - name: 打包并上传生成的 Dylib 供下载
+      - name: 打包并上传
         uses: actions/upload-artifact@v4
         with:
           name: Hook-Dylib
