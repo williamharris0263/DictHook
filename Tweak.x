@@ -1,15 +1,15 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <CommonCrypto/CommonCryptor.h>
+#import <dlfcn.h> // 👇 新增：引入动态查找库
 #import "fishhook.h"
 
 // ==========================================
 // 辅助工具函数
 // ==========================================
-// 1. 获取 SQLite 数据库文件名
-const char *sqlite3_db_filename(void *db, const char *zDbName);
+// 删除了之前的直接声明，改用下面更安全的动态调用
 
-// 2. 将字节转为 Hex 字符串
+// 1. 将字节转为 Hex 字符串
 static NSString * hexStringFromData(const void *bytes, size_t length) {
     if (bytes == NULL || length == 0) return @"";
     NSMutableString *hexStr = [NSMutableString stringWithCapacity:length * 2];
@@ -34,8 +34,15 @@ static int replaced_sqlite3_key(void *db, const void *pKey, int nKey) {
         NSString *keyString = [[NSString alloc] initWithData:keyData encoding:NSUTF8StringEncoding];
         
         NSString *dbPathStr = @"[未知数据库路径]";
-        const char *dbPath = sqlite3_db_filename(db, "main");
-        if (dbPath != NULL) dbPathStr = [NSString stringWithUTF8String:dbPath];
+        
+        // 👇 修复点：使用 dlsym 动态查找函数，彻底绕过编译器的链接报错
+        const char *(*dynamic_sqlite3_db_filename)(void *, const char *) = dlsym(RTLD_DEFAULT, "sqlite3_db_filename");
+        if (dynamic_sqlite3_db_filename != NULL) {
+            const char *dbPath = dynamic_sqlite3_db_filename(db, "main");
+            if (dbPath != NULL) {
+                dbPathStr = [NSString stringWithUTF8String:dbPath];
+            }
+        }
         
         NSString *msg = [NSString stringWithFormat:@"📂 数据库: %@\n🔑 明文: %@\n🧬 Hex: %@", 
                         dbPathStr.lastPathComponent ?: dbPathStr, keyString ?: @"[无法转码]", keyData];
@@ -116,7 +123,7 @@ static int replaced_CCCrypt(CCOperation op, CCAlgorithm alg, CCOptions options,
         }
         
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🛡️ 全能提取器已就绪" 
-                                                                       message:@"1. 数据库密码已在后台静默收集。\n2. 网页解密蹲守中，请随便点击一个词条。\n\n收集到的所有数据均存放在 App 沙盒 Documents 目录下（sqlcipher_all_keys.txt 和 CCCrypt_Key.txt），您也可尝试去备忘录粘贴查看最近的一条。" 
+                                                                       message:@"1. 数据库密码已在后台静默收集。\n2. 网页解密蹲守中，请随便点击一个词条。\n\n收集到的所有数据均存放在 App 沙盒 Documents 目录下（sqlcipher_all_keys.txt 和 CCCrypt_Key.txt）。" 
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"开始提取" style:UIAlertActionStyleDefault handler:nil]];
         if (topVC) {
